@@ -1,0 +1,131 @@
+name: Claude Issue Triage
+
+on:
+  issues:
+    types: [opened, edited]
+
+jobs:
+  triage:
+    # Prevent infinite loops: skip if the actor is the bot itself
+    if: github.actor != 'github-actions[bot]'
+
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write    # needed to push the new issue branch
+      issues: write      # add labels and post comments
+      id-token: write    # required by claude-code-action OIDC auth
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Ensure triage labels exist
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh label create "bug"              --color "d73a4a" --description "Something isn't working correctly"           --repo "${{ github.repository }}" --force
+          gh label create "enhancement"      --color "a2eeef" --description "New feature or improvement request"          --repo "${{ github.repository }}" --force
+          gh label create "question"         --color "d876e3" --description "Further information is requested"            --repo "${{ github.repository }}" --force
+          gh label create "documentation"    --color "0075ca" --description "Improvements or additions to docs"           --repo "${{ github.repository }}" --force
+          gh label create "performance"      --color "e4e669" --description "Speed, frame rate, or memory issue"          --repo "${{ github.repository }}" --force
+          gh label create "gameplay"         --color "f9d0c4" --description "Relates to game mechanics or rules"          --repo "${{ github.repository }}" --force
+          gh label create "visual"           --color "bfd4f2" --description "UI, canvas rendering, or CSS issue"          --repo "${{ github.repository }}" --force
+          gh label create "controls"         --color "c2e0c6" --description "Keyboard input or control mapping"           --repo "${{ github.repository }}" --force
+          gh label create "scoring"          --color "fef2c0" --description "Score, level, or line-count logic"           --repo "${{ github.repository }}" --force
+          gh label create "browser-compat"   --color "e99695" --description "Issue specific to a browser or OS"           --repo "${{ github.repository }}" --force
+          gh label create "good first issue" --color "7057ff" --description "Good for newcomers"                          --repo "${{ github.repository }}" --force
+          gh label create "wontfix"          --color "ffffff" --description "This will not be worked on"                  --repo "${{ github.repository }}" --force
+
+      - name: Create issue branch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          SLUG=$(echo "${{ github.event.issue.title }}" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/-\+/-/g' | sed 's/^-//;s/-$//' | cut -c1-40)
+          BRANCH="issue-${{ github.event.issue.number }}-${SLUG}"
+          echo "ISSUE_BRANCH=${BRANCH}" >> $GITHUB_ENV
+          # Only create the branch if it doesn't already exist on remote
+          if git ls-remote --exit-code --heads origin "${BRANCH}" > /dev/null 2>&1; then
+            echo "Branch ${BRANCH} already exists, skipping creation."
+          else
+            git checkout -b "${BRANCH}"
+            git push origin "${BRANCH}"
+            echo "Created and pushed branch: ${BRANCH}"
+          fi
+
+      - name: Run Claude Issue Triage
+        id: claude-triage
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          claude_args: '--allowedTools "Bash(gh issue edit *)" "Bash(gh issue comment *)"'
+          prompt: |
+            You are an automated issue triage assistant for a classic Tetris game (plain HTML, CSS, vanilla JS — no build step, no dependencies).
+
+            ## Issue to triage
+
+            **Title:** ${{ github.event.issue.title }}
+
+            **Body:**
+            ${{ github.event.issue.body }}
+
+            **Issue number:** #${{ github.event.issue.number }}
+
+            **Branch created for this issue:** `${{ env.ISSUE_BRANCH }}`
+
+            ## Your tasks
+
+            Perform BOTH of the following actions using the gh CLI. Do not ask for confirmation.
+
+            ### Task 1 — Apply labels
+
+            Choose ONE OR MORE labels from this exact list that best categorize the issue. Apply all that fit; do not invent new label names.
+
+            Available labels:
+            - bug — something is broken or behaves incorrectly
+            - enhancement — a new feature or improvement request
+            - question — the author is asking how something works
+            - documentation — the issue is about README or in-code docs
+            - performance — frame rate, speed, or memory concerns
+            - gameplay — game mechanics, piece behavior, line clears, wall kicks
+            - visual — canvas rendering, colors, CSS, ghost piece display
+            - controls — keyboard input, key mapping, pause behavior
+            - scoring — score calculation, level progression, line count
+            - browser-compat — issue only reproduces on a specific browser or OS
+            - good first issue — simple, well-scoped, good for a first-time contributor
+            - wontfix — out of scope or by design
+
+            Command to run (replace LABELS with a comma-separated list, no spaces after commas):
+            gh issue edit ${{ github.event.issue.number }} --repo ${{ github.repository }} --add-label "LABELS"
+
+            ### Task 2 — Post a diagnostic comment
+
+            Post exactly one comment using this command (fill in each field based on your analysis):
+
+            gh issue comment ${{ github.event.issue.number }} --repo ${{ github.repository }} --body "## Triage Analysis
+
+            **Summary:** <one sentence describing the issue>
+
+            **Affected area:** <which part: game loop / rendering / input handling / scoring / piece logic / CSS-layout / documentation>
+
+            **Likely cause:** <your best guess at the root cause, or 'Needs more information' if the issue is vague>
+
+            **Suggested approach:** <one or two sentences on how to investigate or fix it>
+
+            **Labels applied:** <list the labels you applied>
+
+            **Branch created:** \`${{ env.ISSUE_BRANCH }}\`
+
+            ---
+            *Automatically triaged by Claude*"
+
+            ## Rules
+            - Run gh issue edit BEFORE gh issue comment.
+            - Apply at least one label. If nothing clearly fits, apply 'question'.
+            - Keep the comment under 150 words total.
+            - Do not modify the issue title or body.
+            - Do not close the issue.
