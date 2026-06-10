@@ -129,3 +129,5 @@ jobs:
             - Keep the comment under 150 words total.
             - Do not modify the issue title or body.
             - Do not close the issue.
+            - Write the entire comment in Spanish, using proper GitHub-flavored Markdown so it renders correctly (headings, bold, code spans, lists, etc.).
+            - The branch name (already created as `${{ env.ISSUE_BRANCH }}`) uses only lowercase ASCII letters, digits, and hyphens — never include accented characters or ñ in branch names.
